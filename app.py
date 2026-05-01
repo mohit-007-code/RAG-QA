@@ -1,6 +1,7 @@
 import os
 import time
 import re
+import hashlib
 import streamlit as st
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -33,14 +34,16 @@ if "processed_file" not in st.session_state:
     st.session_state.processed_file = None
 
 
-# ---- CACHE RAG PIPELINE ----
+# =========================================================
+# 🔥 CACHE RAG PIPELINE (FASTER)
+# =========================================================
 @st.cache_resource
-def build_rag_pipeline(file_path):
+def build_rag_pipeline(file_path, file_hash):
     docs = load_pdf(file_path)
     chunks = split_documents(docs)
 
     embedding = get_embeddings()
-    db = create_vectorstore(chunks, embedding)
+    db = create_vectorstore(chunks, embedding, file_hash) 
 
     retriever = get_retriever(db)
     qa_chain = build_qa_chain(retriever)
@@ -48,26 +51,38 @@ def build_rag_pipeline(file_path):
     return retriever, qa_chain
 
 
-# 🚀 ---- FORMATTER (MAIN FIX) ----
+# =========================================================
+# 🚀 RESPONSE FORMATTER (IMPROVED)
+# =========================================================
 def format_response(text):
-    # Remove garbage tokens
-    text = text.replace("System:", "").replace("Human:", "")
-    text = text.replace("python ", "")
+    # Remove junk tokens
+    text = re.sub(r"(System:|Human:|Assistant:)", "", text)
+
+    # Normalize spacing
+    text = text.strip()
 
     # Fix numbering
     text = re.sub(r"(\d+)\.\s*", r"\n\n\1. ", text)
 
-    # Fix bullet spacing
+    # Fix bullets
     text = re.sub(r"\n\s*-\s*", "\n- ", text)
 
-    # Detect code
-    if "def " in text or "class " in text:
+    # Detect code more reliably
+    if is_code_response(text):
         code = extract_code(text)
         explanation = text.replace(code, "").strip()
 
         return f"{explanation}\n\n```python\n{code}\n```"
 
-    return text.strip()
+    return text
+
+
+def is_code_response(text):
+    keywords = [
+        "def ", "class ", "import ", "return ",
+        "for ", "while ", "if ", "print("
+    ]
+    return sum(k in text for k in keywords) >= 2
 
 
 def extract_code(text):
@@ -75,31 +90,41 @@ def extract_code(text):
     code_lines = []
 
     for line in lines:
-        if any(keyword in line for keyword in ["def ", "class ", "print(", "return "]):
+        if any(k in line for k in [
+            "def ", "class ", "import ", "return ",
+            "for ", "while ", "if ", "print(", "="
+        ]):
             code_lines.append(line)
 
     return "\n".join(code_lines)
 
 
-# ---- Sidebar ----
+# =========================================================
+# 📂 SIDEBAR
+# =========================================================
 with st.sidebar:
     st.header("📂 Upload Document")
 
     uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
 
     if uploaded_file:
-        file_path = f"temp_{uploaded_file.name}"
+        file_bytes = uploaded_file.read()
+
+        # 🔥 Create file hash (prevents reprocessing same file)
+        file_hash = hashlib.md5(file_bytes).hexdigest()
+
+        file_path = f"temp_{file_hash}.pdf"
 
         with open(file_path, "wb") as f:
-            f.write(uploaded_file.read())
+            f.write(file_bytes)
 
-        if st.session_state.processed_file != uploaded_file.name:
+        if st.session_state.processed_file != file_hash:
             with st.spinner("Processing document..."):
-                retriever, qa_chain = build_rag_pipeline(file_path)
+                retriever, qa_chain = build_rag_pipeline(file_path, file_hash)
 
                 st.session_state.retriever = retriever
                 st.session_state.qa_chain = qa_chain
-                st.session_state.processed_file = uploaded_file.name
+                st.session_state.processed_file = file_hash
 
             st.success("✅ Document processed!")
 
@@ -112,13 +137,17 @@ with st.sidebar:
         st.session_state.messages = []
 
 
-# ---- Display Chat ----
+# =========================================================
+# 💬 DISPLAY CHAT
+# =========================================================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 
-# ---- Chat Input ----
+# =========================================================
+# 💬 CHAT INPUT
+# =========================================================
 if user_input := st.chat_input("Ask something about your document..."):
 
     if len(user_input.strip()) < 3:
@@ -142,21 +171,21 @@ if user_input := st.chat_input("Ask something about your document..."):
                     "question": user_input
                 })
 
-            # 🚀 APPLY FORMATTER
+            # 🚀 FORMAT RESPONSE
             response = format_response(response)
 
             if response.strip().lower() == "i don't know":
                 response = "⚠️ Answer not found in document."
 
-            # 🚀 STREAMING
-            for word in response.split():
-                full_response += word + " "
+            # 🚀 SMOOTHER STREAMING
+            for chunk in response.split(" "):
+                full_response += chunk + " "
                 placeholder.markdown(full_response)
-                time.sleep(0.02)
+                time.sleep(0.01)
 
             # ---- SOURCE ----
             with st.expander("📄 Source Context"):
-                docs = st.session_state.retriever.get_relevant_documents(user_input)
+                docs = st.session_state.retriever.invoke(user_input)
                 for d in docs:
                     st.write(d.page_content[:400])
 

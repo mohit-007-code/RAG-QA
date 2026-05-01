@@ -7,22 +7,22 @@ from langchain_core.runnables import RunnablePassthrough
 
 def build_qa_chain(retriever):
     llm = Ollama(
-        model="tinyllama"
+        model="mistral"
     )   
 
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
     
     chain = (
-        {
-            "context": lambda x: format_docs(
-                retriever.get_relevant_documents(x["question"])
-            ),
-            "question": lambda x: x["question"]
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
+    {
+    "context": lambda x: format_docs(
+        retriever.invoke(x["question"])
+    ),
+    "question": lambda x: x["question"]
+    }
+    | prompt
+    | llm
+    | StrOutputParser()
     )
     
 
