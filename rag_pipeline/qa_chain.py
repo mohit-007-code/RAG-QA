@@ -1,12 +1,10 @@
-from langchain_community.llms import Ollama
-from langchain.chains import RetrievalQA
+from langchain_ollama import ChatOllama
 from rag_pipeline.prompt import prompt
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 
 
-def build_qa_chain(retriever):
-    llm = Ollama(
+def build_chain(retriever):
+    llm = ChatOllama(
         model="mistral"
     )   
 
@@ -14,16 +12,15 @@ def build_qa_chain(retriever):
         return "\n\n".join(doc.page_content for doc in docs)
     
     chain = (
-    {
-    "context": lambda x: format_docs(
-        retriever.invoke(x["question"])
-    ),
-    "question": lambda x: x["question"]
-    }
-    | prompt
-    | llm
-    | StrOutputParser()
+        {
+            "context": lambda x: format_docs(
+                retriever.invoke(x["question"])
+            ),
+            "question": lambda x: x["question"]
+        }
+        | prompt
+        | llm
+        | StrOutputParser()
     )
-    
 
     return chain
